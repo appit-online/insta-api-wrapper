@@ -1,0 +1,53 @@
+export * from './PostModels.js'
+export * from './StoriesMetadata.js'
+export * from './UserGraphQlV2.js'
+export * from './UserMetadata.js'
+export * from './LoginData.js'
+
+/** instagram username */
+export type username = string;
+/** instagram password */
+export type password = string;
+/** instagram post url can be post, reel, tv */
+export type url = string;
+/** Media Type */
+export enum MediaType {
+	IMAGE = 1,
+	VIDEO = 2,
+	CAROUSEL = 8
+}
+export enum ProductType {
+	CAROUSEL = 'carousel_container',
+	REEL = 'clips',
+	TV = 'igtv',
+	STORY = 'story',
+	SINGLE = 'feed'
+}
+
+export enum Typename {
+	GraphImage = "GraphImage",
+	GraphSidecar = "GraphSidecar",
+	GraphVideo = "GraphVideo",
+}
+
+export enum IGPostType {
+	'carousel_container' = 'p',
+	'clips' = 'reel',
+	'igtv' = 'tv',
+	'story' = 'story',
+	'feed' = 'p'
+}
+/** Mime Type */
+export type MimeType = 'image/jpeg' | 'image/png' | 'video/mp4' | 'video/gif';
+/** csrf token */
+export type csrfToken = string;
+/** instagram post type */
+export type postType = 'p' | 'reel' | 'tv' | 'story' | 'feed';
+/** a formatted shortcode */
+// tslint:disable-next-line:class-name
+export interface formattedShortcode {
+	type: postType | string,
+	shortcode: string;
+	url: string;
+	media_id: number | string
+}
