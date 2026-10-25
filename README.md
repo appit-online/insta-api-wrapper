@@ -11,7 +11,7 @@ A lightweight library to **fetch Instagram Stories, Reels, Highlights, user deta
 - Follow and Like via Instagram Private API
 - Fetch Stories, Highlights, Tray, User Profiles, Posts by URL/shortcode/mediaId
 - Session persistence via `node-localstorage`
-- Device parameters synced from backend (`/api/details`) for consistent headers
+- Optional device parameter override via `setDeviceParams()` for consistent headers
 
 ---
 
@@ -45,7 +45,7 @@ if (result.twoFactorRequired) {
 }
 ```
 
-The lib automatically fetches device params from `{backendUrl}/api/details` before login to keep headers in sync. All Instagram traffic goes directly from the caller — the backend is never used as a login proxy.
+All Instagram traffic goes directly from the caller — the backend is never used as a login proxy. To sync device parameters with your backend, call `loginService.setDeviceParams(...)` before login.
 
 ## API Usage
 
@@ -100,7 +100,13 @@ const liked = await igService.like('shortCode', authHeaders);
 
 ### Device Parameters
 
-The lib ships with hardcoded Android device defaults (Pixel 8 Pro, Instagram 428.0.0.47.67). To keep headers in sync with your backend, the `LoginService` fetches `GET {backendUrl}/api/details` once before the first login. Expected response format:
+The lib ships with hardcoded Android device defaults (Pixel 8 Pro, Instagram 428.0.0.47.67). To override:
+
+```typescript
+loginService.setDeviceParams({ version: '428.0.0.47.67', bloksVersioningId: '...' });
+```
+
+Expected format (e.g. from a backend `/api/details` endpoint):
 
 ```json
 {

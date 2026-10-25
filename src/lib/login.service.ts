@@ -7,8 +7,9 @@ import { LocalStorage } from 'node-localstorage';
 const localStorage = new LocalStorage('./scratch');
 
 export interface LoginServiceConfig {
+  /** Base URL of the backend. Used only for verify (follow/like on login). No trailing slash. */
   backendUrl?: string;
-  headersPath?: string;
+  /** Path to the verify endpoint. Defaults to /v2/insta/verify */
   verifyPath?: string;
 }
 
@@ -18,15 +19,12 @@ export class LoginService {
   private phoneId: string;
 
   private readonly backendUrl: string;
-  private readonly headersPath: string;
   private readonly verifyPath: string;
 
   private readonly bloksSvc: BloksLoginService;
-  private deviceParamsLoaded = false;
 
   constructor(private cfg: LoginServiceConfig = {}) {
     this.backendUrl  = cfg.backendUrl  ?? 'https://reelsaver.appit-online.de';
-    this.headersPath = cfg.headersPath ?? '/api/details';
     this.verifyPath  = cfg.verifyPath  ?? '/v2/insta/verify';
 
     this.uuid     = this.getOrCreate('insta_uuid', uuidv4);
@@ -36,21 +34,13 @@ export class LoginService {
     this.bloksSvc = new BloksLoginService(this.uuid, this.phoneId, this.deviceId);
   }
 
-  private async loadDeviceParams(): Promise<void> {
-    if (this.deviceParamsLoaded) return;
-    this.deviceParamsLoaded = true;
-    try {
-      const resp = await got.get(`${this.backendUrl}${this.headersPath}`, { responseType: 'json' });
-      const p = resp.body as BloksDeviceParams;
-      if (p?.bloksVersioningId || p?.version) this.bloksSvc.setDeviceParams(p);
-    } catch (_) {}
+  public setDeviceParams(p: BloksDeviceParams): void {
+    this.bloksSvc.setDeviceParams(p);
   }
 
   // ─── Public login API ───────────────────────────────────────────────────────
 
   public async login(username: string, pass: string, reqHeaders: { [key: string]: string } = {}): Promise<any> {
-    await this.loadDeviceParams();
-
     const result = await this.bloksSvc.login(username, pass);
 
     if (result.twoFactorRequired) return result;
