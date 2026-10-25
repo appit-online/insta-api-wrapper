@@ -364,20 +364,35 @@ export function bloksDetectAirwave(rawStr: string): boolean {
 }
 
 export function bloksExtractSession(rawStr: string): BloksLoginResult | null {
-  const idx = rawStr.indexOf('IGT:2:');
+  const igtMarker = 'IGT:2:';
+  const idx = rawStr.indexOf(igtMarker);
   if (idx === -1) return null;
   let end = rawStr.length;
   for (let i = idx; i < rawStr.length; i++) {
     if (rawStr[i] === '"' || rawStr[i] === '\\') { end = i; break; }
   }
-  const authorization = `Bearer ${rawStr.slice(idx, end)}`;
-  const uidMarker = '"ds_user_id":"';
-  const uidIdx = rawStr.indexOf(uidMarker);
+  const token = rawStr.slice(idx, end);
+  const authorization = `Bearer ${token}`;
+
   let userId = '';
-  if (uidIdx !== -1) {
-    const uStart = uidIdx + uidMarker.length;
-    const uEnd   = rawStr.indexOf('"', uStart);
-    if (uEnd > uStart) userId = rawStr.slice(uStart, uEnd);
+  const lastColon = token.lastIndexOf(':');
+  if (lastColon > 0) {
+    try {
+      const decoded = Buffer.from(token.slice(lastColon + 1), 'base64').toString('utf-8');
+      const parsed = JSON.parse(decoded);
+      if (parsed.ds_user_id) userId = String(parsed.ds_user_id);
+    } catch (_) {}
   }
+
+  if (!userId) {
+    const uidMarker = '"ds_user_id":"';
+    const uidIdx = rawStr.indexOf(uidMarker);
+    if (uidIdx !== -1) {
+      const uStart = uidIdx + uidMarker.length;
+      const uEnd   = rawStr.indexOf('"', uStart);
+      if (uEnd > uStart) userId = rawStr.slice(uStart, uEnd);
+    }
+  }
+
   return { authorization, userId };
 }
