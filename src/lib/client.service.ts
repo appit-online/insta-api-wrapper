@@ -119,6 +119,16 @@ export class InstaService {
     return graphql.data?.user as UserGraphQlV2;
   }
 
+  public async getUserInfoV1(username: string, headers: { [key: string]: string } = {}): Promise<any> {
+    const res = await this.fetchAPI(
+      config.instagram_api_v1,
+      `/users/${username}/usernameinfo/`,
+      {headers},
+      {b: username, type: "p"}
+    );
+    return res?.data?.user ?? {};
+  }
+
 
   /**
    * fetch profile by username. including email, phone number and posts
