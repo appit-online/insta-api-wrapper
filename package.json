@@ -1,6 +1,6 @@
 {
   "name": "insta-api-wrapper",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Anonymous Stories, Search & Download reels, posts, highlights... on Insta",
   "main": "lib/index.js",
   "type": "module",

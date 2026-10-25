@@ -98,6 +98,20 @@ export class InstaService {
    * @returns
    */
   public async getUIdByUsername (username: string, headers: { [key: string]: string } = {}): Promise<string>{
+    try {
+      const res = await this.fetchAPI(
+        config.instagram_api_v1,
+        `/users/search/`,
+        {headers, params: { q: username, count: '1' }},
+      );
+      const users = res?.data?.users;
+      if (Array.isArray(users)) {
+        const exact = users.find((u: any) => u.username?.toLowerCase() === username.toLowerCase());
+        if (exact?.pk) return String(exact.pk);
+        if (users[0]?.pk) return String(users[0].pk);
+      }
+    } catch (_) {}
+
     const res = await this.getUserDetails(username, headers);
     return res?.id as string;
   }
